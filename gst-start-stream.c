@@ -71,8 +71,13 @@ print_source_stats (GObject * source)//it runs every 3 seconds
 
   /* simply dump the stats structure */
   str = gst_structure_to_string (stats);
+  
   g_print ("source stats: %s\n", str);
-  if(g_running==1){
+  
+
+
+
+if(g_running==1){
   	p0=strstr(str,"packets-sent=(guint64)");
   	p1=strchr(p0,',');
   	if(p1!=NULL){
@@ -91,6 +96,7 @@ print_source_stats (GObject * source)//it runs every 3 seconds
   else{
   	g_count=0;
   }
+
 
   gst_structure_free (stats);
   g_free (str);
@@ -128,11 +134,30 @@ print_stats (GstElement * rtpbin)
   return TRUE;
 }
 
+void *monitor_thread(void *arg)
+{
+        while(1){
+        
+     printf("monitor_thread is called,with g_count = %d\n",g_count);
+        sleep(3);
+        if(g_running==1)
+           g_count++;//3 seconds once
+        else
+          g_count=0;
+        if(g_count>200)//10 minutes
+        {
+           gst_element_set_state(g_pipeline,GST_STATE_NULL);
+           printf("set the gst state to NULL because of 10 minutes\n");
+           g_count=0;
+           g_running=0;
+         }
+      }
+}
+
 gboolean file_watch_fun(GIOChannel *source, GIOCondition condition, void *data)
 {
 	gchar *str;
 	gsize byte_read;
-        printf("file_watch_fun is called\n"); 
 	if(g_io_channel_read_line(source,&str,&byte_read,NULL,NULL)==G_IO_STATUS_NORMAL){
 
 		if(str[0]=='s'){
@@ -140,14 +165,14 @@ gboolean file_watch_fun(GIOChannel *source, GIOCondition condition, void *data)
 			printf("set the gst state to NULL to stop the stream\n");
 			g_running=0;
 		}
-                if(str[0]=='r'){
-                       gst_element_set_state(g_pipeline,GST_STATE_PLAYING);
-                       printf("set the gst state to playing \n");
-                       g_running=1;
-                }
-                else
-                 printf("other characters,ingonring\n");
-		
+    if(str[0]=='r'){
+      gst_element_set_state(g_pipeline,GST_STATE_PLAYING);
+      printf("set the gst state to playing \n");
+      g_running=1;
+    }
+    else
+      printf("other characters,ingonring\n");
+
 		return TRUE;
 	}
 }
@@ -188,6 +213,8 @@ main (int argc,char* argv[])
   int sock;
   char buffer[10];
   int len;
+  int index,udpport;
+  pthread_t tid;
   
   g_wd_sockfd=socket(AF_INET,SOCK_DGRAM,0); 
 
@@ -233,6 +260,9 @@ DDR_on));
   /* the pipeline to hold everything */
   g_pipeline = gst_pipeline_new (NULL);
   g_assert (g_pipeline);
+  index=atoi(argv[1]+5);
+  udpport=index*2+8552; 
+  pthread_create(&tid,NULL,monitor_thread,(void*)NULL);
   
   //set the iochannel
 #if 0
@@ -287,11 +317,11 @@ DDR_on));
   /* the udp sinks and source we will use for RTP and RTCP */
   rtpsink = gst_element_factory_make ("udpsink", "rtpsink");
   g_assert (rtpsink);
-  g_object_set (rtpsink, "port", 8554, "host", DEST_HOST, NULL);
+  g_object_set (rtpsink, "port", udpport, "host", DEST_HOST, NULL);
 
   rtcpsink = gst_element_factory_make ("udpsink", "rtcpsink");
   g_assert (rtcpsink);
-  g_object_set (rtcpsink, "port", 8555, "host", DEST_HOST, NULL);
+  g_object_set (rtcpsink, "port", udpport+1, "host", DEST_HOST, NULL);
   /* no need for synchronisation or preroll on the RTCP sink */
   g_object_set (rtcpsink, "async", FALSE, "sync", FALSE, NULL);
 
