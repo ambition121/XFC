@@ -27,6 +27,7 @@
 #define MAX_COMMAND_LEN 50
 #define BUFFER_SIZE 1024 //message mode
 #define MAXBUF 100
+#define WD_SERVER_PORT 9802
 
 int check_flow = 0; //Define a global variable, used to check_flow 
 int stop_stream_flag = 0;//if the stream is stop we make the flag to 0,,,at 1106
@@ -63,6 +64,23 @@ char phonenum[20];
 int  g_pipefd[2];
 
 int turn_on = 0, turn_off = 1;
+
+int commanlen;
+
+//by li
+enum gst_wd_type{
+GST_NEED_NONE=0,
+GST_NEED_RESET,
+};
+
+enum hearbeat_wd_type{
+	HEARTBEAT_NEED_NONE=0,
+	HEARTBEAT_NEED_RESET,
+};
+
+int g_heartbeat_reset = HEARTBEAT_NEED_NONE;//we use this global variable to monitor hearbeat
+int g_gst_reset = GST_NEED_NONE;//we use this global variable to monitor the gstreamer status.
+//by li
 
 
 enum
@@ -101,7 +119,7 @@ int main(int argc,char *argv[])
 	int ret;
 	int flag = 1;
 	int state;
-	int state_logging_c,state_processing_c,state_processing_fail,  state_connect_fail=0;
+	int state_logging_c,state_processing_c, state_connect_fail=0;
 	char buffer[MAXBUF] = {0};
 	char heartbeat[] = {0xF2,0x07,0x05,0x01,0xFF};//the command that the heartbeat
 	char reset[] = {0xF2,0x13,0x05,0x01,0x0B};//reset that  logging
@@ -156,7 +174,7 @@ int main(int argc,char *argv[])
 	
   	atcommand_process(); //send the message to 10010
 
-  	watchdog = 0;//crate the watchdog thread
+  //	watchdog = 0;//crate the watchdog thread
   	watchdog_process();  //we process the watchdog
         
 	while(1)
@@ -185,7 +203,8 @@ int main(int argc,char *argv[])
 					printf("connect's count is %d\n",state_connect_fail);
 					if(state_connect_fail > 5)
 					{
-						watchdog = 1;
+					//	watchdog = 1;
+						g_heartbeat_reset=HEARTBEAT_NEED_RESET;
 					}
 					state = START;
 					break;
@@ -221,7 +240,6 @@ int main(int argc,char *argv[])
 
 			state = PROCESSING;	
 			state_processing_c = 0;
-      		state_processing_fail = 0;
 
       		restart_flag = 0;
 			break;
@@ -285,20 +303,9 @@ int main(int argc,char *argv[])
 				}
 				else
 				{
-				 	sleep(3);
-            		state_processing_fail++;
-            		if(state_processing_fail > 10) 
-            		{
-				    	if(stop_stream_flag != 0)
-				    	{					
-						stop_stream(sockfd);
-				    	}
-            			state=START;
-            			printf("we switch to START state because we cannot receive message from server\n");
-            			restart_flag = 1;
-            			break;
-            		}
-						printf("Failed to receive the message! \n");
+            		state = HEARTBEAT;
+					printf("Failed to receive the message! \n");
+					break;
 				}
 			}
 		    
@@ -372,7 +379,8 @@ int main(int argc,char *argv[])
 						state = START;
 					    if(keepflag >50)
 					    {
-                        	watchdog = 1;
+                        //	watchdog = 1;
+					    	g_heartbeat_reset=HEARTBEAT_NEED_RESET;
                         }    	
                         printf("we switch to START state because we sent 10 times heartbeat that but the server not sent us\n");
                         restart_flag = 1;
@@ -382,7 +390,6 @@ int main(int argc,char *argv[])
 			}
 			state = PROCESSING;
 			state_processing_c =0;
-			state_processing_fail=0;
 			break;
 					
 		default:
@@ -432,17 +439,8 @@ void * operation(void * arg)
 		{
 			printf("start the stream faild\n");
 			send(sockfd,command,5,0);
-		}	
-		sleep(120); //when the stream is pulling 60',we stop the stream 
-		if(stop_stream_flag != 0)
-		{
-			printf("the stream is pushing!\n");
-			stop_stream(sockfd);
-		}	
-		else
-		{
-			printf("the stream is stopped!!\n");
 		}
+
 		pthread_exit((void *)1);
 }
 
@@ -620,15 +618,10 @@ printf("\n");
 					}	
 					else if(buffer[1] == 0x15){
 						return_flag = 1;
-						int i,j=0,k=0;
-						for(i=3;i<=13;i++){  //get the phone number
-							return_command[j] = buffer[i];
-							j++;
-						}
-						for(i=14;i<=buffer[2]-15;i++){ //get the detail that server want to send
-							return_detail[k] = buffer[i];
-							k++;
-						}
+						memcpy(return_command,&buffer[3],11);
+						memcpy(return_detail,&buffer[14],buffer[2]-15);
+						commanlen = buffer[2]-15;
+
 					}
 					else if(buffer[1] == 0x16){
 						printf("server receive the message that client send it!!\n");
@@ -725,11 +718,13 @@ void * send_gsm(void * arg)
 				else
 				{
 					printf("confirm is wrong!!\n");
+					#if 0
 					if(confirm_count > 80)
 					{
 						watchdog = 1;
 					}
-					sleep(3);
+					#endif
+					sleep(10);
 					stat = OPEN;
 					break;
 				}
@@ -816,24 +811,49 @@ void * send_gsm(void * arg)
 					bzero(buffer8,50); //init the buffer8 to 0
 					bzero(buffer9,100); //init the buffer9 to 0
 					memcpy(buffer8,cmgs,9);
-					memcpy(&buffer8[9],return_command,11);
-					buffer8[20] = '\"';
-					buffer8[21] = '\r';
+//					memcpy(&buffer8[9],return_command,11);
+					memcpy(&buffer8[9],return_command,strlen(return_command));
+//					buffer8[20] = '\"';
+					buffer8[9+strlen(return_command)] = '\"';
+//					buffer8[21] = '\r';
+					buffer8[10+strlen(return_command)] = '\r';
 
-				//	memcpy(buffer9,return_detail,5);
-					strcat(buffer9,return_detail);
-					buffer9[strlen(return_detail)] = '\r';
-					buffer9[strlen(return_detail)+1] = 0x1A;
-					buffer9[strlen(return_detail)+2] = '\r';
+		//			memcpy(buffer9,return_detail,strlen(return_detail));
+		printf("the return_detail is:%s\n",return_detail);
+		printf("the return_detail's len is:%d %d\n",strlen(return_detail),sizeof(return_detail));
+		printf("return_detail[1] is:%c\n",return_detail[1]);
+		printf("return_detail[3] is:%c\n",return_detail[3]);
+		printf("return_detail[5] is:%c\n",return_detail[5]);
+		int a,b=0;
+		for(a=0;a<commanlen;a++)
+		{
+			if(a%2 == 0)
+			{
+				buffer9[b] = return_detail[a+1];
+				b++;
+			}
+		}
+		buffer9[commanlen/2] = '\r';
+		buffer9[commanlen/2+1] = 0x1A;
+		buffer9[commanlen/2+2] = '\r';
+		#if 0
+		buffer9[0] = return_detail[1];
+		buffer9[1] = return_detail[3];
+		buffer9[2] = return_detail[5];
+		buffer9[3] = '\r';
+		buffer9[4] = 0x1A;
+		buffer9[5] = '\r';
+		#endif
+				//	buffer9[strlen(return_detail)] = '\r';
+				//	buffer9[strlen(return_detail)+1] = 0x1A;
+				//	buffer9[strlen(return_detail)+2] = '\r';
 					num = write(portfd,buffer8,strlen(buffer8));
-						printf("&&&&&&&num is:%d\n",num);
-						printf("!&write the number len is:%d\n",nwrite);
-						printf("!&buffer8 is:%s\n",buffer8);
+		printf("&&&&&&&num is:%d\n",num);
+		printf("!&buffer8 is:%s\n",buffer8);
 					sleep(2);
 					content = write(portfd,buffer9,strlen(buffer9));
-						printf("&&&&&&&&content is:%d\n",content);
-						printf("!!write the number len is:%d\n",nwrite);
-						printf("buffer9 is:%s\n",buffer9);
+		printf("&&&&&&&&content is:%d\n",content);
+		printf("buffer9 is:%s\n",buffer9);
 
 					if(num > 0 && content >0)
 					{
@@ -979,76 +999,33 @@ void * send_gsm(void * arg)
 				**/
     			if(nread <= 239) //241 stand:1 B stand 8 b = 255,the head's length is 3,the number's length is 11;255-3-11=241
     			{
+					char out1[255];
 		    		char whole_mesg[] = {0xF2,0x16};
 		    		bzero(atcommand_to_servermesg,BUFFER_SIZE);
 		    		memcpy(atcommand_to_servermesg,whole_mesg,2);
-		    		atcommand_to_servermesg[2] = nread+16;	//the command's length
+		    	//	atcommand_to_servermesg[2] = nread+16;	//the command's length
 		    		atcommand_to_servermesg[3] = 1;
 		    		memcpy(&atcommand_to_servermesg[4],out ,11);//the number that send the client's message
-			//	memcpy(&atcommand_to_servermesg[14],buff,nread/*strlen(buff)*/); //send the whole message to server
-
-					strcat(atcommand_to_servermesg,buff);
+			
+		    		char strout[] = "\r";
+    				char strin[] = "\n";
+    				int choose = 2;
+    				between_character(buff,strout,strin,out1,choose);
+    				atcommand_to_servermesg[2] = strlen(out1)+16;
+					strcat(atcommand_to_servermesg,/*buff*/out1);
 
 					atcommand_to_server_allmessage = 1;
 
-					add_checksum(atcommand_to_servermesg, nread+16);
-
-					printf("the buff is:%s\n",buff);
-					printf("the nread is %d\n",nread);
-					printf("the atcommand's length is %d\n",strlen(atcommand_to_servermesg));
+					add_checksum(atcommand_to_servermesg, strlen(out1)+16);
 				}
 				else
 				{
-					int a,b,c;
-					a = nread / 239;
-					b = nread % 239;
-					for(c = 0; c < a; c++)
-					{
-						char str[239];
-						memcpy(str,&buff[239*c],239);
-
-						char whole_mesg[] = {0xF2,0x16};
-						bzero(atcommand_to_servermesg,BUFFER_SIZE);
-						memcpy(atcommand_to_servermesg,whole_mesg,2);
-						atcommand_to_servermesg[2] = 255;	//the command's length
-						atcommand_to_servermesg[3] = a+1; //the total message's 
-	printf("1.!!!!!!!!!#####is:%d\n",atcommand_to_servermesg[3]);
-						memcpy(&atcommand_to_servermesg[4],out ,11);//the number that send the client's message
-					//	strcat(atcommand_to_servermesg,out);
-	printf("2.!!!!!!!!!#####is:%d\n",atcommand_to_servermesg[3]);
-					//	strcat(atcommand_to_servermesg,str);
-						memcpy(&atcommand_to_servermesg[15],str ,239);
-	printf("3.!!!!!!!!!#####is:%d\n",atcommand_to_servermesg[3]);
-
-						atcommand_to_server_allmessage = 1;
-
-						add_checksum(atcommand_to_servermesg, 255);
-
-	printf("4.!!!!!!!!!!!!!is:%d\n",atcommand_to_servermesg[3]);
-	printf("5.the length is:%d\n",strlen(atcommand_to_servermesg));
-						sleep(5);
-					}
-				char whole_mesg[] = {0xF2,0x16};
-		    		bzero(atcommand_to_servermesg,BUFFER_SIZE);
-		    		memcpy(atcommand_to_servermesg,whole_mesg,2);
-		    		atcommand_to_servermesg[2] = b+16;	//the command's length
-		    		atcommand_to_servermesg[3] = a+1;
-		    		memcpy(&atcommand_to_servermesg[4],out ,11);//the number that send the client's message
-			//	memcpy(&atcommand_to_servermesg[14],buff,nread/*strlen(buff)*/); //send the whole message to server
-
-					strcat(atcommand_to_servermesg,&buff[239*c]);
-
-					atcommand_to_server_allmessage = 1;
-
-					add_checksum(atcommand_to_servermesg,b+16);
-
-					sleep(5);
-
+					stat = DELETE;
+					break;
 				}
 
 				sleep(3);
-			//	stat = DELETE;
-				stat = CHECK;
+				stat = DELETE;
 				break;
 		    }
 		    	
@@ -1135,8 +1112,6 @@ int getcommand( char buffer[], struct circular_buffer *cbuffer, int len)
 	int cbuflen = 2*MAXBUF - cbuffer->empty_len;//the effective character on the circular buffer
 	if(cbuflen <= 0)				//没有有效数据；
 	return -1;
-//printf("\nread_pos:%d\n",cbuffer->read_pos); 
-//printf("empty_len:%d\n",cbuffer->empty_len);
 
 	//searching the sync word
 	for(i=0;i<cbuflen;i++) {
@@ -1148,8 +1123,7 @@ int getcommand( char buffer[], struct circular_buffer *cbuffer, int len)
 			cbuffer->read_pos++;
 			if(cbuffer->read_pos >= 2*MAXBUF)
 				cbuffer->read_pos = 0;
-			cbuffer->empty_len++;  
-	//		printf("empty_len1:%d\n",cbuffer->empty_len); 
+			cbuffer->empty_len++;   
 			if(cbuffer->empty_len == 2*MAXBUF)
 				return -1;
         	}
@@ -1157,7 +1131,6 @@ int getcommand( char buffer[], struct circular_buffer *cbuffer, int len)
     
 	cbuflen = 2*MAXBUF - cbuffer->empty_len;//the effective character on the circular buffer
 	command_len = cbuffer->buf[(cbuffer->read_pos+2)%(MAXBUF*2)];//the length of this command
-//	printf("command_len:%3d  cbuflen:%3d\n", command_len, cbuflen);
 	if(cbuflen < MIN_COMMAND_LEN)				//uncomplete command remains on the circular buffer
 		return -1;
 
@@ -1169,7 +1142,6 @@ int getcommand( char buffer[], struct circular_buffer *cbuffer, int len)
 			cbuffer->read_pos = 0;
 		
 		cbuffer->empty_len++;
-//		printf("empty_len2:%d\n",cbuffer->empty_len);
 		return 1;
 	}
 	
@@ -1194,15 +1166,12 @@ int getcommand( char buffer[], struct circular_buffer *cbuffer, int len)
 		
 		if(checksum_check(buffer, command_len) == 0) {			//校验和正确
 			cbuffer->empty_len += command_len;
-//			printf("empty_len3:%d\n",cbuffer->empty_len);
+
 			return command_len;
 		}
 		else {													//校验和错误，恢复读指针；
 			cbuffer->read_pos = read_pos_backup;
-//	printf("read_pos(checksum_check fail):%d\n",cbuffer->read_pos);
-//	printf("CHECKSUM ERROR!\n");
 			cbuffer->empty_len++;
-//			printf("empty_len4:%d\n",cbuffer->empty_len);
 			return 1;
 		}
 	}
@@ -1211,14 +1180,60 @@ int getcommand( char buffer[], struct circular_buffer *cbuffer, int len)
 
 //the watchdog function
 void *watchdog_function(void *arg);
+
+//void *gst_monitor_function(void *arg);//0107
 watchdog_process(void)
 {
-	  	pthread_t tid3;
-        	int err;
-        	err = pthread_create(&tid3,NULL,watchdog_function,(void*)NULL);//at 11.16
+	  	pthread_t tid3 /*,tid4*/;
+        int err;
+        err = pthread_create(&tid3,NULL,watchdog_function,(void*)NULL);//at 11.16
 		if(err != 0)
 			printf("error creat"); 
+#if 0 
+		err = pthread_create(&tid4,NULL,gst_monitor_function,(void*)NULL); //0107
+		if(err !=0)
+			printf("error create thread of gst_monitor_function\n");
+#endif
 }
+#if 0
+//the thread:gst_monitor_function is used to receive the report/cmd from gstreamer
+void *gst_monitor_function(void *arg)
+{
+	struct sockaddr_in servaddr; 
+	char buffer[20];
+  int addr_len=sizeof(struct sockaddr_in);
+  int len;
+  int SO_REUSEADDR_on = 1;
+  int wd_sock;
+  
+  /* always init first */
+  wd_sock = socket(AF_INET,SOCK_DGRAM,0);
+  
+  g_gst_reset =GST_NEED_NONE;
+  
+  setsockopt(wd_sock, SOL_SOCKET, SO_REUSEADDR, &SO_REUSEADDR_on, sizeof(SO_REUSEADDR_on));
+
+  bzero(&servaddr,sizeof(servaddr));
+  servaddr.sin_family = AF_INET;
+  servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+  servaddr.sin_port = htons(WD_SERVER_PORT);
+  if(bind(wd_sock,(struct sockaddr*)&servaddr,sizeof(servaddr))<0){
+    printf("bind udp port:%d error\n",WD_SERVER_PORT);
+    return NULL;
+  }
+
+  while(1){
+  	bzero(buffer,sizeof(buffer));
+  	len = recvfrom(wd_sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&servaddr ,&addr_len);
+  	if(strncmp(buffer,"reset",5)==0){
+  		//gstream requires to reboot the system
+  		g_gst_reset=GST_NEED_RESET;
+  	}
+	}
+  
+}
+#endif
+
 void *watchdog_function(void *arg)
 {
 	enum
@@ -1234,7 +1249,8 @@ void *watchdog_function(void *arg)
      	switch(stat)
      	{
      		case CIRCLE:
-     			if(watchdog == 0)
+     		//	if(watchdog == 0)
+     			if(g_heartbeat_reset == HEARTBEAT_NEED_NONE && g_gst_reset==GST_NEED_NONE)
      			{
    					watchdoggpio();						
     			}//if(watchdog == 0)
