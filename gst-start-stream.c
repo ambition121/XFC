@@ -28,6 +28,7 @@
 #include <unistd.h>
 
 #define UDP_TEST_PORT   9800 //port is 9800
+#define WD_SERVER_PORT 9802
 /*
  * A simple RTP server 
  *  sends the output of alsasrc as alaw encoded RTP on port 5002, RTCP is sent on
@@ -52,20 +53,44 @@
 #define DEST_HOST "123.57.250.247"
 //extern FILE* stream_record_fd;
 static GstElement *g_pipeline;
-
+struct sockaddr_in g_wd_server_addr;
+int g_wd_sockfd;
+gchar g_wd_resetcmd[]="reset";
+int g_send_packets[1024]={0,0};
+int g_count=0;
+int g_running=0;
 /* print the stats of a source */
 static void
-print_source_stats (GObject * source)
+print_source_stats (GObject * source)//it runs every 3 seconds
 {
   GstStructure *stats;
   gchar *str;
-
+  gchar *p0,*p1;
   /* get the source stats */
   g_object_get (source, "stats", &stats, NULL);
 
   /* simply dump the stats structure */
   str = gst_structure_to_string (stats);
   g_print ("source stats: %s\n", str);
+  if(g_running==1){
+  	p0=strstr(str,"packets-sent=(guint64)");
+  	p1=strchr(p0,',');
+  	if(p1!=NULL){
+  		*p1=0;
+  		p0+=strlen("packets-sent=(guint64)");
+  		g_send_packets[g_count]=atoi(p0);
+  		printf("get the sent packets:%d\n",g_send_packets[g_count]);
+  	}
+  	
+  	if(g_count>0&&(g_send_packets[g_count]-g_send_packets[g_count-1]==0)){
+  		//pipeline has probelm,we notify the main process to reboot the system
+  		sendto(g_wd_sockfd,g_wd_resetcmd,sizeof(g_wd_resetcmd),0,(struct sockaddr*)&g_wd_server_addr,sizeof(struct sockaddr_in));
+  	}
+  	g_count++;
+  }
+  else{
+  	g_count=0;
+  }
 
   gst_structure_free (stats);
   g_free (str);
@@ -113,10 +138,12 @@ gboolean file_watch_fun(GIOChannel *source, GIOCondition condition, void *data)
 		if(str[0]=='s'){
 			gst_element_set_state(g_pipeline,GST_STATE_NULL);//GST_STATE_PLAYING or GST_STATE_PAUSED
 			printf("set the gst state to NULL to stop the stream\n");
+			g_running=0;
 		}
                 if(str[0]=='r'){
                        gst_element_set_state(g_pipeline,GST_STATE_PLAYING);
                        printf("set the gst state to playing \n");
+                       g_running=1;
                 }
                 else
                  printf("other characters,ingonring\n");
@@ -161,7 +188,17 @@ main (int argc,char* argv[])
   int sock;
   char buffer[10];
   int len;
+  
+  g_wd_sockfd=socket(AF_INET,SOCK_DGRAM,0); 
 
+  bzero(&g_wd_server_addr,sizeof(g_wd_server_addr));
+
+  g_wd_server_addr.sin_family = AF_INET;
+
+  g_wd_server_addr.sin_port = htons(WD_SERVER_PORT);
+
+  g_wd_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+  
 #if 0
   struct sockaddr_in servaddr; 
   int addr_len=sizeof(struct sockaddr_in);
@@ -298,9 +335,9 @@ DDR_on));
   /* set the pipeline to playing */
   g_print ("starting sender pipeline\n");
   gst_element_set_state (g_pipeline, GST_STATE_NULL);
-
-  /* print stats every second */
-  g_timeout_add (10000, (GSourceFunc) print_stats, rtpbin);
+  g_running=0;
+  /* print stats every 3 second */
+  g_timeout_add (3000, (GSourceFunc) print_stats, rtpbin);
 
   /* we need to run a GLib main loop to get the messages */
   loop = g_main_loop_new (NULL, FALSE);
