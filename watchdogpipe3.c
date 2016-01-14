@@ -40,7 +40,7 @@ char success_send[] = {0xF2,0x15,0x05,0x01,0x0D};
 char faild_send[] = {0xF2,0x15,0x05,0xF1,0xFD};
 #endif
 
-char g_user[16] = {"board1"};
+char g_user[16] = {"board2"};
 char g_passwd[16] = {"1"};
 
 /*we send the flow to the server*/
@@ -172,10 +172,11 @@ int main(int argc,char *argv[])
 	cbuffer.write_pos=0;
 	cbuffer.empty_len=MAXBUF*2;
 	
-  	atcommand_process(); //send the message to 10010
+ // 	atcommand_process(); //send the message to 10010
 
-  //	watchdog = 0;//crate the watchdog thread
-  	watchdog_process();  //we process the watchdog
+ // 	watchdog_process();  //we process the watchdog
+
+	stremer_or_no();//this pthread is determine whether there is a video stream
         
 	while(1)
 	{
@@ -595,6 +596,8 @@ printf("\n");
 						keepalive();//just print a message
 					}
 					else if (buffer[1] == 0x08){
+						start_stream(sockfd);
+						#if 0
 						if(stop_stream_flag == 0)//have stopped
 						{
 							start_stream(sockfd);
@@ -603,6 +606,7 @@ printf("\n");
 						{
 							printf("!!!the stream is pulling!!!\n");
 						}
+						#endif
 					}
 					else if (buffer[1] == 0x09){
 						stop_stream(sockfd);
@@ -612,6 +616,7 @@ printf("\n");
 					}
                     else if(buffer[1] == 0x11){
                         remote(sockfd);
+                        //this we can add the shell that close the watchdog
                     }
 					else if(buffer[1] == 0x12){
 						closeremote(sockfd);
@@ -1064,7 +1069,7 @@ void * send_gsm(void * arg)
                 }
                 else
                 {
-                    sleep(30);
+                    sleep(60);
                  	stat = CHECK;
 		    		sleep(2);
                   	break;
@@ -1180,25 +1185,36 @@ int getcommand( char buffer[], struct circular_buffer *cbuffer, int len)
 
 //the watchdog function
 void *watchdog_function(void *arg);
+void *gst_monitor_function(void *arg);//0111,by zhang
 
-//void *gst_monitor_function(void *arg);//0107
 watchdog_process(void)
 {
-	  	pthread_t tid3 /*,tid4*/;
+	pthread_t tid3 /*,tid4*/;
         int err;
         err = pthread_create(&tid3,NULL,watchdog_function,(void*)NULL);//at 11.16
 		if(err != 0)
 			printf("error creat"); 
-#if 0 
+ #if 0
 		err = pthread_create(&tid4,NULL,gst_monitor_function,(void*)NULL); //0107
 		if(err !=0)
 			printf("error create thread of gst_monitor_function\n");
 #endif
 }
-#if 0
+
+stremer_or_no(void)
+{
+	pthread_t tid4;
+	int err;
+	err = pthread_create(&tid4,NULL,gst_monitor_function,(void*)NULL);//gst_monitor_function recvform the rsert that send by vodeo.out
+	if(err != 0)
+		printf("error create!\n");
+}
+
+
 //the thread:gst_monitor_function is used to receive the report/cmd from gstreamer
 void *gst_monitor_function(void *arg)
 {
+printf("1.***$$$$$@@@@####\n");
 	struct sockaddr_in servaddr; 
 	char buffer[20];
   int addr_len=sizeof(struct sockaddr_in);
@@ -1217,14 +1233,17 @@ void *gst_monitor_function(void *arg)
   servaddr.sin_family = AF_INET;
   servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
   servaddr.sin_port = htons(WD_SERVER_PORT);
-  if(bind(wd_sock,(struct sockaddr*)&servaddr,sizeof(servaddr))<0){
+  if(bind(wd_sock,(struct sockaddr*)&servaddr,sizeof(servaddr))<0)
+  {
     printf("bind udp port:%d error\n",WD_SERVER_PORT);
     return NULL;
   }
 
   while(1){
   	bzero(buffer,sizeof(buffer));
+printf("***$$$$$@@@@####\n");
   	len = recvfrom(wd_sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&servaddr ,&addr_len);
+printf("^^^^^^receform the gst's buffer is:%s\n",buffer);
   	if(strncmp(buffer,"reset",5)==0){
   		//gstream requires to reboot the system
   		g_gst_reset=GST_NEED_RESET;
@@ -1232,7 +1251,8 @@ void *gst_monitor_function(void *arg)
 	}
   
 }
-#endif
+
+
 
 void *watchdog_function(void *arg)
 {
