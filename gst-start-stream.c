@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <gst/gst.h>
 #include <netinet/in.h>
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
@@ -51,6 +52,8 @@
 
 /* change this to send the RTP data and RTCP to another host */
 #define DEST_HOST "123.57.250.247"
+
+int stream_flag = 0; //when we push the steam the stream_flag turn 1
 //extern FILE* stream_record_fd;
 static GstElement *g_pipeline;
 struct sockaddr_in g_wd_server_addr;
@@ -60,6 +63,8 @@ int g_send_packets[1024]={0,0};
 int g_count=0;
 int g_running=0;
 /* print the stats of a source */
+
+
 static void
 print_source_stats (GObject * source)//it runs every 3 seconds
 {
@@ -77,6 +82,7 @@ print_source_stats (GObject * source)//it runs every 3 seconds
 
 
 
+#if 0
 if(g_running==1){
   	p0=strstr(str,"packets-sent=(guint64)");
   	p1=strchr(p0,',');
@@ -85,6 +91,7 @@ if(g_running==1){
   		p0+=strlen("packets-sent=(guint64)");
   		g_send_packets[g_count]=atoi(p0);
   		printf("get the sent packets:%d\n",g_send_packets[g_count]);
+		printf("******#############\n");
   	}
   	
   	if(g_count>0&&(g_send_packets[g_count]-g_send_packets[g_count-1]==0)){
@@ -96,6 +103,8 @@ if(g_running==1){
   else{
   	g_count=0;
   }
+#endif
+
 
 
   gst_structure_free (stats);
@@ -154,8 +163,11 @@ void *monitor_thread(void *arg)
       }
 }
 
+
+void *check_monitor(void *arg);//we declare the pthread that check the monitor
 gboolean file_watch_fun(GIOChannel *source, GIOCondition condition, void *data)
 {
+  pthread_t tid1;
 	gchar *str;
 	gsize byte_read;
 	if(g_io_channel_read_line(source,&str,&byte_read,NULL,NULL)==G_IO_STATUS_NORMAL){
@@ -163,19 +175,64 @@ gboolean file_watch_fun(GIOChannel *source, GIOCondition condition, void *data)
 		if(str[0]=='s'){
 			gst_element_set_state(g_pipeline,GST_STATE_NULL);//GST_STATE_PLAYING or GST_STATE_PAUSED
 			printf("set the gst state to NULL to stop the stream\n");
+      stream_flag = 0;
 			g_running=0;
 		}
     if(str[0]=='r'){
+      stream_flag = 1;
+      int fd;
       gst_element_set_state(g_pipeline,GST_STATE_PLAYING);
       printf("set the gst state to playing \n");
-      g_running=1;
-    }
-    else
-      printf("other characters,ingonring\n");
 
+      g_running=1;
+      pthread_create(&tid1,NULL,check_monitor,(void*)NULL); //this pthread is to check the monitor
+    }
+    	else
+      		printf("other characters,ingonring\n");
 		return TRUE;
 	}
 }
+
+
+void *check_monitor(void *arg)
+{
+
+  g_wd_sockfd = socket(AF_INET,SOCK_DGRAM,0); 
+  bzero(&g_wd_server_addr,sizeof(g_wd_server_addr));
+  g_wd_server_addr.sin_family = AF_INET;
+  g_wd_server_addr.sin_port = htons(WD_SERVER_PORT);
+  g_wd_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+  FILE * fp;
+  FILE * fp1;
+  char buffer[20];
+  char buffer1[20];
+  float flow;
+  while(stream_flag)
+  {
+    fp = popen("/home/media/work/monitor.sh","r");
+    fgets(buffer, sizeof(buffer), fp);
+    printf("the first flow is:%s\n",buffer);
+
+    sleep(2);
+    fp1 = popen("/home/media/work/monitor.sh","r");
+    fgets(buffer1, sizeof(buffer1), fp1);
+    printf("the last flow is:%s", buffer1);
+
+    flow = atof(buffer1)/1000000 - atof(buffer)/1000000;
+    printf("2 seconds make the flow is:%.2fM\n",flow);
+    if(flow < 0.05)
+    {
+      sendto(g_wd_sockfd,g_wd_resetcmd,sizeof(g_wd_resetcmd),0,(struct sockaddr*)&g_wd_server_addr,sizeof(struct sockaddr_in));
+    }
+    pclose(fp);
+    pclose(fp1);
+  }
+  pthread_exit(0);
+}
+
+
+
 
 
 /* build a pipeline equivalent to:
@@ -215,7 +272,7 @@ main (int argc,char* argv[])
   int len;
   int index,udpport;
   pthread_t tid;
-  
+ #if 0 
   g_wd_sockfd=socket(AF_INET,SOCK_DGRAM,0); 
 
   bzero(&g_wd_server_addr,sizeof(g_wd_server_addr));
@@ -225,6 +282,7 @@ main (int argc,char* argv[])
   g_wd_server_addr.sin_port = htons(WD_SERVER_PORT);
 
   g_wd_server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+#endif
   
 #if 0
   struct sockaddr_in servaddr; 
@@ -278,7 +336,7 @@ DDR_on));
   g_assert (videosrc);
   
   g_object_set(G_OBJECT(videosrc),"device","/dev/video3",NULL);
-	g_object_set(G_OBJECT(videosrc),"inputnum",1,NULL);
+	g_object_set(G_OBJECT(videosrc),"inputnum",7,NULL);
         g_object_set(G_OBJECT(videosrc),"sensor_name","adv7280m_a 3-0020",NULL);	
 	filter=gst_element_factory_make("capsfilter","filter");
 	g_assert(filter);
@@ -318,7 +376,6 @@ DDR_on));
   rtpsink = gst_element_factory_make ("udpsink", "rtpsink");
   g_assert (rtpsink);
   g_object_set (rtpsink, "port", udpport, "host", DEST_HOST, NULL);
-
   rtcpsink = gst_element_factory_make ("udpsink", "rtcpsink");
   g_assert (rtcpsink);
   g_object_set (rtcpsink, "port", udpport+1, "host", DEST_HOST, NULL);
@@ -361,12 +418,12 @@ DDR_on));
   if (gst_pad_link (srcpad, sinkpad) != GST_PAD_LINK_OK)
     g_error ("Failed to link rtcpsrc to rtpbin");
   gst_object_unref (srcpad);
-
   /* set the pipeline to playing */
   g_print ("starting sender pipeline\n");
   gst_element_set_state (g_pipeline, GST_STATE_NULL);
-  g_running=0;
-  /* print stats every 3 second */
+  g_running=0; 
+
+ /* print stats every 3 second */
   g_timeout_add (3000, (GSourceFunc) print_stats, rtpbin);
 
   /* we need to run a GLib main loop to get the messages */
@@ -374,8 +431,8 @@ DDR_on));
   g_main_loop_run (loop);
 
   g_print ("stopping sender pipeline\n");
+
   gst_element_set_state (g_pipeline, GST_STATE_NULL);
-  
 	g_io_channel_shutdown(input,TRUE,NULL);
 	g_io_channel_unref(input);
 	g_main_loop_unref(loop);
