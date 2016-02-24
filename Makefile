@@ -1,2 +1,5 @@
 all:
-	gcc -g -o watchdogpipe3 watchdogpipe3.c mystr.c adjust_camera.c remote.c ctrl_gpio.c -lpthread
+	gcc  watchdogpipe3.c adjust_camera.c ctrl_gpio.c mystr.c remote.c `pkg-config --cflags --libs gstreamer-0.10` -o watchdogipe3 -lpthread
+	gcc  -g gst-start-stream1.c `pkg-config --cflags --libs gstreamer-0.10` -o videopush.out -lpthread
+	gcc write1.c -o write1
+
